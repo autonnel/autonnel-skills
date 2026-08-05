@@ -1,0 +1,26 @@
+{
+  "name": "autonnel",
+  "version": "0.2.0",
+  "description": "Funnel skills for agents: landing page conversion audits, funnel design, post-purchase upsells, server-side conversion tracking, platform choice, and self-hosted launch.",
+  "homepage": "https://github.com/autonnel/autonnel-skills",
+  "skills": [
+    {
+      "path": "landing-page-conversion-audit"
+    },
+    {
+      "path": "sales-funnel-blueprint"
+    },
+    {
+      "path": "post-purchase-upsell-flow"
+    },
+    {
+      "path": "server-side-conversion-tracking"
+    },
+    {
+      "path": "funnel-platform-picker"
+    },
+    {
+      "path": "self-hosted-funnel-launch"
+    }
+  ]
+}
