@@ -216,6 +216,10 @@ The instance exposes its admin API as MCP tools at `/api/mcp`, so an agent can b
 }
 ```
 
+Calling `/api/mcp` with raw HTTP rather than an MCP client has two transport requirements the SDK normally hides. The endpoint speaks Streamable HTTP: the request must carry `Accept: application/json, text/event-stream` - anything less is rejected with `406` before the tool layer is reached - and a success comes back as an SSE frame (`event: message` / `data: {...}`), so the JSON-RPC envelope has to be unwrapped from `data: ` before parsing.
+
+One more trap in front of the app entirely: an instance behind Cloudflare with the default managed bot rules **rejects the Python standard library's user agent**. A `urllib` client sends `Python-urllib/3.x` and gets `403` with the plain-text body `error code: 1010` on *every* path including `/api/health`, which reads exactly like an auth or permission failure and is not JSON, so a client that parses the body throws before it can see the status. Only that agent string is blocked - `curl`, `python-requests`, `httpx`, `axios`, `node` and an empty UA all pass. If you script this in Python, set an explicit `User-Agent` or use `requests`/`httpx`; if every call including unauthenticated ones returns `403`, this is why, and no API key will fix it.
+
 `.mcp.json` at the project root for Claude Code; `claude_desktop_config.json` for Claude Desktop. Generate the key in admin → **Settings → API Keys**. Every call is scoped to that key's tenant. Read tools work with any key; mutating tools need `writeAccess` toggled on. Treat a write key as production credentials: one per agent, read-only keys for reporting, revoke rather than share.
 
 Tools are self-describing - the client reads names, descriptions and input schemas on connect, so this skill does not repeat them. What follows is only what introspection cannot tell you.
@@ -226,11 +230,13 @@ This is the single thing most likely to make a client read a failure as a succes
 
 | Condition | What you actually get |
 |---|---|
+| Blocked at the CDN edge (see the `Python-urllib` note above) | HTTP 403 with a plain-text `error code: 1010` body and no JSON at all - the request never reached the app |
+| Missing or partial `Accept` header | HTTP 406 with a JSON-RPC `error` object (`-32000`) - a transport rejection shaped exactly like a tool error, see above |
 | Auth failure | HTTP 401, no JSON-RPC frame at all |
 | Unknown tool name | HTTP 200 with a real JSON-RPC `error` object carrying a numeric code - the only in-band failure shaped that way, because it happens before dispatch |
 | Everything else: missing write access, validation failure, not found, conflict, server error | HTTP 200 with `result.isError === true` and the message in `result.content[0].text`, and **no** JSON-RPC `error` object |
 
-So: if `error` is present it is an unknown tool; otherwise check `result.isError` before trusting `result.content`. Read the message rather than retrying blindly - a validation failure names the exact field path, and a conflict names the rule that was hit.
+So: if `error` is present, read the HTTP status before concluding anything - `406` is the transport rejecting your headers, `200` is an unknown tool name. Otherwise check `result.isError` before trusting `result.content`. Read the message rather than retrying blindly - a validation failure names the exact field path, and a conflict names the rule that was hit.
 
 ### Rules that cause most failed writes
 
@@ -241,8 +247,9 @@ So: if `error` is present it is an unknown tool; otherwise check `result.isError
 - **Draft and published are separate.** Writes land in `draftData`; `publish: true` promotes it and invalidates the render cache. Write, verify with `get_page`, publish in a second call.
 - **`draftData` is not structurally validated.** Nothing checks `root` / `content` / `zones`, required props, or component type names before saving. A malformed document is accepted and only breaks at render time.
 - **Component types must come from `get_template({ key })`**, never from a remembered list. The component set is renamed and extended over releases, and because `draftData` is unvalidated, a stale component name saves cleanly and renders blank. A template's JSON is the authoritative shape.
-- **`draftData` and `htmlContent` are not checked against the page's `editorType`.** `create_page` accepts only `draftData`; `update_page` accepts both on any page and writes whichever you send to a column the other renderer never reads. Match the field to the page's real editor type yourself.
-- **Media before pages.** `upload_media` fetches a URL server-side and returns a CDN URL for component props. A local file has no URL to give it, so it goes over REST instead: `POST /api/v1.1/media/upload`, `multipart/form-data` with a `file` part, `201` with `{ assetId, url }`. Only `image/jpeg|png|webp|gif` and `video/mp4|webm` are accepted, and a key without `writeAccess` gets a bare `403 {"error":"forbidden"}` here rather than the readable message the MCP tools return.
+- **Content must match the page's `editorType`.** `editorType` is optional on `create_page` and **defaults to `PUCK`**, so an HTML page created without it is silently a Puck page. `create_page` accepts only `draftData`; `update_page` accepts `draftData` on `PUCK` pages and `htmlContent` on `HTML` / `GRAPESJS` pages, and rejects the mismatch (`page <id> has editorType HTML; use htmlContent, not draftData`) rather than writing to a column the renderer never reads. Set `editorType` explicitly at create time - a page's editor type cannot be changed afterwards through these tools.
+- **Media before pages.** `upload_media` fetches a URL server-side and returns a CDN URL for component props. A local file has no URL to give it, so it goes over REST instead: `POST /api/v1.1/media/upload`, `multipart/form-data` with a `file` part, `201` with `{ assetId, url }`. Only `image/jpeg|png|webp|gif` and `video/mp4|webm` are accepted, and a key without `writeAccess` gets the same `403` write-denied envelope as every other write endpoint. If storage was never configured this returns `412` naming Settings -> Storage, not a generic `500`.
+- **There is no way to delete a page over the API.** No `delete_page` tool, and no `DELETE` on `/api/v1.1/pages/{pageId}` - only `GET` and `PUT`. Funnels can be deleted (`delete_funnel`), pages cannot, so every abandoned or misnamed page is permanent until someone removes it in the admin UI. Pick slugs deliberately on the first try, and do trial runs on a throwaway instance rather than the tenant you are building.
 - **`get_stats` counts unique users, not views.** Five visits by one visitor is 1.
 - **`list_orders` cannot filter by funnel**, and its amounts divide minor units by 100 - correct for USD/EUR, wrong for JPY or BHD.
 - **Ad spend is not available here.** Core ads support is token-mode conversion postback only: no campaign or spend queries. Pull spend from the ad platform directly for ROAS.
@@ -250,9 +257,14 @@ So: if `error` is present it is an unknown tool; otherwise check `result.isError
 ### Build order
 
 ```
-list_products → list_templates → get_template → upload_media
-  → create_page × N → get_page → edit draftData → update_page → get_page → update_page({ publish: true })
+list_products → list_templates → get_template
+  → media first:  remote URL → upload_media (MCP)
+                  local file → POST /api/v1.1/media/upload (REST, multipart)
+                  then swap the returned CDN url into the content you are about to write
+  → create_page × N (name, slug, type, editorType) → update_page (draftData or htmlContent)
+  → get_page (verify) → update_page({ publish: true })
   → create_funnel → add_funnel_page × N (pageId + unique stepSlug) → get_funnel
+  → GET /storefront/{page.slug} → expect 200
 ```
 
 **A `/n/` URL never renders the step it names.** `/n/{funnelId}/{stepSlug}` is a forward redirect: it finds that step, `302`s to the **next** step's bare page slug with `?funnelId=` appended, and answers `404 No next step in funnel` on the last step. Point it at your landing step and you get the checkout, or a 404 if nothing follows - either way, not the landing page.
@@ -268,6 +280,8 @@ list_products → list_templates → get_template → upload_media
 To change a live page: `get_page` → edit only the props you mean to change → `update_page` without publish → `get_page` to diff → publish. Never regenerate a whole `draftData` blob for one headline; `update_page` replaces the document wholesale, and component JSON carries prop values you did not write and cannot reconstruct.
 
 ### REST is not the same surface
+
+REST takes the same `Authorization: Bearer <api-key>` header as MCP; without it you get a bare `401`.
 
 Thirteen tools are also reachable over REST through a bridge that runs the identical schema and handler, so those cannot drift. Seven are MCP-only: `list_funnels`, `get_funnel`, `list_pages`, `get_page`, `list_products`, `deliver_order`, `get_stats`. Some of those have an older, independently written REST endpoint at the same path with a different response shape or parameter name (`GET /products` takes `q`, not `search`). Do not assume a REST endpoint matches the tool of the same name.
 
