@@ -181,9 +181,9 @@ Build the checkout before the landing page. The checkout determines what can act
 ## Step 5: wire the funnel
 
 - Create the funnel, then attach pages with their role and order.
-- A `LANDING` page can belong to only one funnel. Attempting to reuse one across funnels is rejected - clone it instead.
+- The same page may be referenced by several funnels. The only uniqueness rule the domain enforces is that a `stepSlug` is unique within one funnel (and a page appears at most once per funnel) - there is no cross-funnel rejection to design around. Clone a landing page only when you want the two funnels to diverge, because an edit to a shared page lands on every funnel referencing it.
 - `THANKYOU` and `ERROR` are auto-bound from existing pages at creation if any exist; if the tenant has none, create them before going live. A funnel with no error page fails silently on declined payments.
-- The funnel's promotional URL (the first landing page) is what goes into ad campaigns. Steps are reachable by short slugs so the buyer's path across steps survives cross-domain hops.
+- The URL that goes into ad campaigns is the landing page's own slug on a storefront host - `https://shop.example.com/{page.slug}` - never a `/n/` step URL. `/n/{funnelId}/{stepSlug}` redirects *forward* to the next step, so it belongs in a page's CTA link, not in an ad. Writing the CTA that way keeps the buyer's path stable when a step is swapped for another page.
 - Publish is explicit and versioned per page and per funnel - publishing a page does not publish the funnel binding.
 
 ## Step 6: instrument before sending traffic
@@ -234,7 +234,7 @@ So: if `error` is present it is an unknown tool; otherwise check `result.isError
 
 ### Rules that cause most failed writes
 
-- **A funnel step is `{ stepSlug, pageId }` and nothing else.** Order is array order. A step's role in the flow is the referenced page's own `type`; there is no `pageType`, `order` or `subOrder` field. `stepSlug` is required on `add_funnel_page`, must be unique within the funnel, and forms `/n/{funnelId}/{stepSlug}`. The schemas are `.strict()`, so an extra field is rejected rather than ignored.
+- **A funnel step is `{ stepSlug, pageId }` and nothing else.** Order is array order. A step's role in the flow is the referenced page's own `type`; there is no `pageType`, `order` or `subOrder` field. `stepSlug` is required on `add_funnel_page`, must be unique within the funnel, and forms `/n/{funnelId}/{stepSlug}` - which is a forward redirect, not the step's own URL (see Build order). The schemas are `.strict()`, so an extra field is rejected rather than ignored.
 - **Steps are keyed by the page they reference**, so a page appears at most once per funnel, but the same page may be referenced by several funnels. There is no "belongs to one funnel only" rule.
 - **There is no `LANDING` page type.** Page `type` is `CHECKOUT | THANKYOU | UPSELL | ERROR | CUSTOM`, stored uppercase. A landing page is a `CUSTOM` page that a funnel references.
 - **Thank-you and error steps are live references, not snapshots.** `create_funnel` adds steps for the tenant's existing thank-you and error pages, creating them from templates if none exist. Editing that page later changes every funnel referencing it - clone it if one funnel should diverge.
@@ -242,7 +242,7 @@ So: if `error` is present it is an unknown tool; otherwise check `result.isError
 - **`draftData` is not structurally validated.** Nothing checks `root` / `content` / `zones`, required props, or component type names before saving. A malformed document is accepted and only breaks at render time.
 - **Component types must come from `get_template({ key })`**, never from a remembered list. The component set is renamed and extended over releases, and because `draftData` is unvalidated, a stale component name saves cleanly and renders blank. A template's JSON is the authoritative shape.
 - **`draftData` and `htmlContent` are not checked against the page's `editorType`.** `create_page` accepts only `draftData`; `update_page` accepts both on any page and writes whichever you send to a column the other renderer never reads. Match the field to the page's real editor type yourself.
-- **Media before pages.** `upload_media` fetches a URL server-side and returns a CDN URL for component props. Binary upload is REST-only, not an MCP tool.
+- **Media before pages.** `upload_media` fetches a URL server-side and returns a CDN URL for component props. A local file has no URL to give it, so it goes over REST instead: `POST /api/v1.1/media/upload`, `multipart/form-data` with a `file` part, `201` with `{ assetId, url }`. Only `image/jpeg|png|webp|gif` and `video/mp4|webm` are accepted, and a key without `writeAccess` gets a bare `403 {"error":"forbidden"}` here rather than the readable message the MCP tools return.
 - **`get_stats` counts unique users, not views.** Five visits by one visitor is 1.
 - **`list_orders` cannot filter by funnel**, and its amounts divide minor units by 100 - correct for USD/EUR, wrong for JPY or BHD.
 - **Ad spend is not available here.** Core ads support is token-mode conversion postback only: no campaign or spend queries. Pull spend from the ad platform directly for ROAS.
@@ -255,7 +255,15 @@ list_products → list_templates → get_template → upload_media
   → create_funnel → add_funnel_page × N (pageId + unique stepSlug) → get_funnel
 ```
 
-**Do not treat `entryStepSlug` as the URL to advertise.** It is literally `steps[0]`, and `create_funnel` appends the thank-you and error steps before you add anything, so on a funnel built this way `steps[0]` is the thank-you page. Read the `steps` array from `get_funnel`, pick the step whose `page.type` is `CUSTOM`, and fetch `/n/{funnelId}/{thatStepSlug}` to confirm the landing page renders before spending money on it.
+**A `/n/` URL never renders the step it names.** `/n/{funnelId}/{stepSlug}` is a forward redirect: it finds that step, `302`s to the **next** step's bare page slug with `?funnelId=` appended, and answers `404 No next step in funnel` on the last step. Point it at your landing step and you get the checkout, or a 404 if nothing follows - either way, not the landing page.
+
+**`entryStepSlug` is not the URL to advertise either.** It is literally `steps[0]`, and `create_funnel` appends the thank-you and error steps before you add anything, so on a funnel built this way `steps[0]` is the thank-you page.
+
+**The page is served at its own bare slug on a storefront host**: `https://{storefront-host}/{page.slug}`. Read `steps` from `get_funnel`, pick the step whose `page.type` is `CUSTOM`, and advertise that step's `page.slug`. Append `?funnelId={id}` only when the page is bound to more than one funnel; with a single binding the funnel context resolves on its own.
+
+**Bare slugs work only on a non-admin host.** The middleware rewrites `/{slug}` to the storefront renderer when the host does *not* match `ADMIN_DOMAIN`; on the admin host itself that path falls through to the admin app and 404s, which reads exactly like an unpublished page. A Workers deployment reachable only at its `*.workers.dev` admin hostname therefore has no clean landing-page URL until a storefront domain is attached - attach one before buying traffic.
+
+**To verify with nothing but an API key, request `/storefront/{slug}`.** That prefix is public on every host including the admin one, and renders what a shopper gets. It serves PUBLISHED pages only - a draft 404s there while `get_page` still happily returns its `draftData`. `/preview/{slug}` does render drafts, but requires a logged-in session, so an API key cannot use it. Confirm a `200` and that the expected copy is in the body before spending money on it.
 
 To change a live page: `get_page` → edit only the props you mean to change → `update_page` without publish → `get_page` to diff → publish. Never regenerate a whole `draftData` blob for one headline; `update_page` replaces the document wholesale, and component JSON carries prop values you did not write and cannot reconstruct.
 
