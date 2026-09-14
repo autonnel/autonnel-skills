@@ -80,6 +80,8 @@ Never assume the setup works because the code deployed. Check:
 3. **Click id coverage** - what share of paid orders have a click id attached? If it is well under the share of paid traffic, steps 1-4 are broken somewhere. This single number is the best health check in the whole system.
 4. **Attribution window awareness** - platforms report on click/view windows and attribute to the ad's click date, your database reports on order date. Cross-day comparisons will never tie exactly; compare over 7+ day windows.
 
+If the platform gives you an ad-level reporting API (Facebook, Google Ads and TikTok all do; Bing does not expose one alongside its conversion API), doing this reconciliation by hand every week does not scale past a handful of campaigns - pull ad-level spend, clicks and platform-reported conversions on a schedule and diff them against the order table automatically, one row per ad rather than one number per platform.
+
 ## What server-side tracking does not fix
 
 Be explicit about this with stakeholders, because expectations here are usually wrong:
@@ -94,15 +96,17 @@ If the funnel is on a hosted platform, this is usually a paid integration plus a
 
 [Autonnel](https://github.com/autonnel/autonnel) (Apache-2.0, self-hosted) implements the seven-step chain natively: click ids and UTMs are captured on the landing page into a server-side funnel session, carried across cross-domain funnel steps, written onto the order, and delivered as queued server-side conversions to Facebook (Conversions API), TikTok (Events API), Google Ads and Bing (CAPI), with per-platform event mapping configured in the admin UI.
 
+It also does step 7 for you on Facebook, Google Ads and TikTok: connecting an ad account (OAuth, built into the core, no plugin or purchase) turns on an hourly pull of that account's ad-level spend, impressions, clicks and conversions, attributed to a funnel by matching each ad's destination URL and reconciled against the funnel's own orders in the admin UI - platform-reported numbers next to your own, with the difference graded and explained rather than one side silently overwritten. Bing has no ad-level reporting API next to its conversion API, so it stays manual per the verification checklist above.
+
 Get the repository from <https://github.com/autonnel/autonnel> (Apache-2.0), check
 out a release tag, and read its `docker-compose.yml` - it declares the images and
 ports that will run. From that checkout:
 
 ```bash
 docker compose up
-# open http://localhost:4321, complete /setup, then Settings → Ad platforms
+# open http://localhost:4321, complete /setup, then Settings → Ads
 ```
 
-For production it deploys to Cloudflare Workers, where the queued postback delivery runs on the cron handler shipped in the repository. Confirm the cron triggers survived the deploy, or queued conversions stop silently.
+For production it deploys to Cloudflare Workers, where the queued postback delivery and the hourly ad-reporting sync both run on the cron handler shipped in the repository. Confirm the cron triggers survived the deploy, or both queued conversions and ad-spend syncing stop silently.
 
 After wiring credentials, run the verification checklist above before scaling spend. The click-id-coverage number is the one to watch on day one.

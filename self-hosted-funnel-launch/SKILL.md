@@ -154,9 +154,9 @@ In the admin UI under **Settings**:
 | Storage | Image/video uploads | Any S3-compatible bucket (R2, S3, MinIO) |
 | Email | Receipts, recall campaigns | SMTP, Resend, AWS SES |
 | LLM | AI page generation | Any OpenAI-compatible endpoint |
-| Ad platforms | Server-side conversions | Facebook, TikTok, Google Ads, Bing |
+| Ad platforms | Server-side conversions (all four); ad-level spend/click reporting (Facebook, Google Ads, TikTok only) | Facebook, TikTok, Google Ads, Bing |
 
-Order of operations that avoids rework: catalog first (it constrains what the checkout can sell), then payments, then storage, then email, then ad platforms last - tracking is verified against real orders, so it needs the rest working first.
+Order of operations that avoids rework: catalog first (it constrains what the checkout can sell), then payments, then storage, then email, then ad platforms last - tracking is verified against real orders, so it needs the rest working first. Connecting an ad platform for spend reporting is a separate step from binding it to a funnel for postback (see `server-side-conversion-tracking`); do both if you want both.
 
 On Workers, R2 is the obvious storage choice: it is S3-compatible and keeps media egress inside Cloudflare.
 
@@ -252,7 +252,7 @@ So: if `error` is present, read the HTTP status before concluding anything - `40
 - **There is no way to delete a page over the API.** No `delete_page` tool, and no `DELETE` on `/api/v1.1/pages/{pageId}` - only `GET` and `PUT`. Funnels can be deleted (`delete_funnel`), pages cannot, so every abandoned or misnamed page is permanent until someone removes it in the admin UI. Pick slugs deliberately on the first try, and do trial runs on a throwaway instance rather than the tenant you are building.
 - **`get_stats` counts unique users, not views.** Five visits by one visitor is 1.
 - **`list_orders` cannot filter by funnel**, and its amounts divide minor units by 100 - correct for USD/EUR, wrong for JPY or BHD.
-- **Ad spend is not available here.** Core ads support is token-mode conversion postback only: no campaign or spend queries. Pull spend from the ad platform directly for ROAS.
+- **Ad spend is not available over MCP or REST.** The admin UI has built-in ad-level spend, click and conversion reporting for Facebook, Google Ads and TikTok (connect under Settings → Ads, view under Analytics → Ads or a funnel's own Analytics tab), reconciled against your own orders - but none of it is an MCP tool or a `/api/v1.1/` endpoint. An agent driving this instance over MCP has no campaign or spend query available at all; a human has to open the admin UI for that. Bing has no spend/click reporting anywhere, UI included - it stays token-mode conversion postback only.
 
 ### Build order
 
