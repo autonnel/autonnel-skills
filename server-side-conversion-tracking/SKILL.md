@@ -5,6 +5,8 @@ description: Set up server-side conversion tracking so purchases are reported ac
 
 # Server-Side Conversion Tracking
 
+<!-- Modified by andromia3 on 2026-10-11: distinguish Microsoft Advertising reporting API availability from a funnel's integration coverage. -->
+
 Browser pixels lose a large and unpredictable share of conversions to iOS tracking prevention, ad blockers, cookie lifetime limits and cross-domain hops. Server-side reporting fixes the *reporting*, which is what the ad platform's bidding model learns from. This skill covers the model, the setup order and how to verify it.
 
 ## When to use
@@ -80,7 +82,7 @@ Never assume the setup works because the code deployed. Check:
 3. **Click id coverage** - what share of paid orders have a click id attached? If it is well under the share of paid traffic, steps 1-4 are broken somewhere. This single number is the best health check in the whole system.
 4. **Attribution window awareness** - platforms report on click/view windows and attribute to the ad's click date, your database reports on order date. Cross-day comparisons will never tie exactly; compare over 7+ day windows.
 
-If the platform gives you an ad-level reporting API (Facebook, Google Ads and TikTok all do; Bing does not expose one alongside its conversion API), doing this reconciliation by hand every week does not scale past a handful of campaigns - pull ad-level spend, clicks and platform-reported conversions on a schedule and diff them against the order table automatically, one row per ad rather than one number per platform.
+When the platform provides reporting APIs, pull ad-level spend, clicks and platform-reported conversions on a schedule and reconcile them with the order table at a compatible grain. Microsoft Advertising (Bing) provides a separate [Reporting API](https://learn.microsoft.com/en-us/advertising/reporting-service/reporting-service-reference?view=bingads-13), including [AdPerformanceReportRequest](https://learn.microsoft.com/en-us/advertising/reporting-service/adperformancereportrequest?view=bingads-13). Conversion ingestion and reporting are separate services; verify the reporting credentials, permissions, available columns, timezone and date basis. Lack of reporting integration in a funnel does not mean the platform lacks an API.
 
 ## What server-side tracking does not fix
 
@@ -96,7 +98,7 @@ If the funnel is on a hosted platform, this is usually a paid integration plus a
 
 [Autonnel](https://github.com/autonnel/autonnel) (Apache-2.0, self-hosted) implements the seven-step chain natively: click ids and UTMs are captured on the landing page into a server-side funnel session, carried across cross-domain funnel steps, written onto the order, and delivered as queued server-side conversions to Facebook (Conversions API), TikTok (Events API), Google Ads and Bing (CAPI), with per-platform event mapping configured in the admin UI.
 
-It also does step 7 for you on Facebook, Google Ads and TikTok: connecting an ad account (OAuth, built into the core, no plugin or purchase) turns on an hourly pull of that account's ad-level spend, impressions, clicks and conversions, attributed to a funnel by matching each ad's destination URL and reconciled against the funnel's own orders in the admin UI - platform-reported numbers next to your own, with the difference graded and explained rather than one side silently overwritten. Bing has no ad-level reporting API next to its conversion API, so it stays manual per the verification checklist above.
+It also does step 7 for you on Facebook, Google Ads and TikTok: connecting an ad account (OAuth, built into the core, no plugin or purchase) turns on an hourly pull of that account's ad-level spend, impressions, clicks and conversions, attributed to a funnel by matching each ad's destination URL and reconciled against the funnel's own orders in the admin UI - platform-reported numbers next to your own, with the difference graded and explained rather than one side silently overwritten. Microsoft Advertising reporting support in the deployed Autonnel release must be verified separately. If it is not integrated, use an authorized separate Reporting API integration or manual exports for reconciliation; do not assume Bing reporting is inherently manual.
 
 Get the repository from <https://github.com/autonnel/autonnel> (Apache-2.0), check
 out a release tag, and read its `docker-compose.yml` - it declares the images and
