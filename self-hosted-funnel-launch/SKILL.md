@@ -208,7 +208,7 @@ The instance exposes its admin API as MCP tools at `/api/mcp`, so an agent can b
 {
   "mcpServers": {
     "autonnel": {
-      "transport": "http",
+      "type": "http",
       "url": "https://<your-autonnel-host>/api/mcp",
       "headers": { "Authorization": "Bearer <your-api-key>" }
     }
@@ -220,7 +220,7 @@ Calling `/api/mcp` with raw HTTP rather than an MCP client has two transport req
 
 One more trap in front of the app entirely: an instance behind Cloudflare with the default managed bot rules **rejects the Python standard library's user agent**. A `urllib` client sends `Python-urllib/3.x` and gets `403` with the plain-text body `error code: 1010` on *every* path including `/api/health`, which reads exactly like an auth or permission failure and is not JSON, so a client that parses the body throws before it can see the status. Only that agent string is blocked - `curl`, `python-requests`, `httpx`, `axios`, `node` and an empty UA all pass. If you script this in Python, set an explicit `User-Agent` or use `requests`/`httpx`; if every call including unauthenticated ones returns `403`, this is why, and no API key will fix it.
 
-`.mcp.json` at the project root for Claude Code; `claude_desktop_config.json` for Claude Desktop. Generate the key in admin → **Settings → API Keys**. Every call is scoped to that key's tenant. Read tools work with any key; mutating tools need `writeAccess` toggled on. Treat a write key as production credentials: one per agent, read-only keys for reporting, revoke rather than share.
+That is the `.mcp.json` shape for Claude Code (`type: "http"` is required; an entry without it is skipped). Claude Desktop does not read remote servers from `claude_desktop_config.json`: add a custom connector with the URL and an `Authorization` entry under Request headers, and note it connects from Anthropic's cloud, so a `localhost` instance is unreachable. Config for Codex, Cursor and Windsurf: <https://autonnel.com/docs/api/agent-page-editing>. Generate the key in admin → **Settings → API Keys**. Every call is scoped to that key's tenant. Read tools work with any key; mutating tools need `writeAccess` toggled on. Treat a write key as production credentials: one per agent, read-only keys for reporting, revoke rather than share.
 
 Tools are self-describing - the client reads names, descriptions and input schemas on connect, so this skill does not repeat them. What follows is only what introspection cannot tell you.
 
